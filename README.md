@@ -32,7 +32,27 @@ How to make?:
      ```  
      intra = "vio0"  # Replace with your internet interface (e.g., vio0)  
      vpn = "enc0"  
-     # ... [Add firewall rules from the blog] ...  
+     set reassemble yes
+     set block-policy return
+     set loginterface egress
+     set skip on { lo, enc }
+     match in all scrub (no-df random-id max-mss 1440)
+     table <ossec_fwtable> persist
+     table <badguys> persist file "/etc/badguys"
+     block in quick  on egress from <badguys> label "bad"
+     block out quick on egress to <badguys> label "bad"
+     block in quick  on egress from <ossec_fwtable> label "bad"
+     block out quick on egress to <ossec_fwtable> label "bad"
+     block in quick from urpf-failed label uRPF
+     block return log
+     pass out all modulate state
+     pass in on egress proto { ah, esp }
+     pass in on egress proto udp to (egress) port { isakmp, ipsec-nat-t }
+     pass out on egress from 10.0.1.0/24 to any nat-to (egress)
+     pass out on $intra from 10.0.1.0/24 to $intra:network nat-to ($intra)
+     pass in quick inet proto icmp icmp-type { echoreq, unreach }
+     pass in on egress proto tcp from any to (egress) port 22 keep state (max-src-conn 40, max-src-conn-rate 10/30, overload <badguys> flush global)
+     pass in on $intra proto { udp tcp } from any to ($intra) port 53
      ```  
    - Reload firewall: `pfctl -f /etc/pf.conf`.
 
@@ -40,10 +60,15 @@ How to make?:
    - Generate a **strong Pre-Shared Key (PSK)** (e.g., use a password manager).  
    - Create `/etc/iked.conf` with your PSK and settings:  
      ```  
-     ikev2 "inet" passive ipcomp esp \  
-     psk "YOUR_STRONG_PSK" \  
-     config address 10.0.1.0/24 \  
-     # ... [Add other settings from the blog] ...  
+     ikev2 "inet" passive ipcomp esp \
+      from 0.0.0.0/0 to 10.0.1.0/24 \
+      from 10.0.0.0/24 to 10.0.1.0/24 \
+      local egress peer any \
+      psk "{{iked_psk}}" \
+      config protected-subnet 0.0.0.0/0 \
+      config address 10.0.1.0/24 \
+      config name-server 172.31.1.0.2 \ #THIS SHOULD BE YOUR DNS, IT COULD BE WHAT EVER YOU USE IN YOUR OUTBOUND INTERFACE
+      tag "IKED" tap enc0
      ```  
    - Restart OpenIKED: `rcctl reload iked`.
 
